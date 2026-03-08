@@ -86,8 +86,7 @@ def build_deck():
                 print(f"  + Spell: {card['name']} (${card['price']})")
 
     # 3. CALCULATE BASICS
-    # We need to hit exactly TARGET_LANDS. 
-    # basics = 37 - (any utility lands we found)
+
     basics_needed = TARGET_LANDS - len(final_nonbasic_lands)
     
     land_map = {'W': 'Plains', 'U': 'Island', 'B': 'Swamp', 'R': 'Mountain', 'G': 'Forest'}
@@ -102,13 +101,13 @@ def build_deck():
         if count > 0:
             basic_list.append(f"{count} {land_name}")
 
-    # 4. FINAL ASSEMBLY & EXPORT
+    # 4. FINAL ASSEMBLY
     full_deck = [f"1 {cmdr_name} *CMDR*"]
     for s in final_spells: full_deck.append(f"1 {s}")
     for l in final_nonbasic_lands: full_deck.append(f"1 {l}")
     for b in basic_list: full_deck.append(b)
 
-    # FINAL CHECK: If we are under 100 (due to lack of synergy cards), add more basics
+    # FINAL CHECK
     current_total = sum([int(line.split(' ', 1)[0]) for line in full_deck])
     if current_total < 100:
         shortfall = 100 - current_total
