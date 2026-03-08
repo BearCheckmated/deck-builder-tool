@@ -5,7 +5,7 @@ import time
 # 1. THE DATA FETCHERS
 # ---------------------------------------------------------
 def get_card_data(card_name):
-    """Enhanced Scryfall fetcher that identifies if a card is a Land."""
+    """Fetches a single card (used primarily for the Commander)."""
     formatted_name = card_name.replace(' ', '+')
     url = f"https://api.scryfall.com/cards/named?exact={formatted_name}"
     try:
@@ -17,10 +17,41 @@ def get_card_data(card_name):
                 "price": float(d.get('prices', {}).get('usd') or 0),
                 "identity": d.get('color_identity', []),
                 "type": d.get('type_line', "").lower(),
-                "is_land": "land" in d.get('type_line', "").lower()
+                "is_land": "land" in d.get('type_line', "").lower(),
+                "cmc": d.get('cmc', 3.0)  
             }
-    except: pass
+    except requests.exceptions.RequestException as e:
+        print(f"Network error fetching {card_name}: {e}")
     return None
+
+def get_bulk_card_data(card_names):
+    """Fetches up to 75 cards at once using Scryfall's collection endpoint."""
+    url = "https://api.scryfall.com/cards/collection"
+    identifiers = [{"name": name} for name in card_names]
+    
+    try:
+        # Scryfall requires a short delay between requests if making multiple
+        time.sleep(0.1) 
+        res = requests.post(url, json={"identifiers": identifiers})
+        
+        if res.status_code == 200:
+            data = res.json()
+            results = {}
+            for d in data.get('data', []):
+                results[d['name']] = {
+                    "name": d.get('name'),
+                    "price": float(d.get('prices', {}).get('usd') or 0),
+                    "identity": d.get('color_identity', []),
+                    "type": d.get('type_line', "").lower(),
+                    "is_land": "land" in d.get('type_line', "").lower()
+                }
+            return results
+        else:
+            print(f"Failed to fetch batch. Status code: {res.status_code}")
+    except requests.exceptions.RequestException as e:
+        print(f"Network error during bulk fetch: {e}")
+    
+    return {}
 
 def get_edhrec_synergy(commander):
     """Pulls cards sorted by synergy."""
@@ -34,7 +65,8 @@ def get_edhrec_synergy(commander):
                 if c.get('synergy'):
                     cards.append({'name': c['name'], 'synergy': c['synergy']})
         return sorted(cards, key=lambda x: x['synergy'], reverse=True)
-    except: return []
+    except requests.exceptions.RequestException: 
+        return []
 
 # ---------------------------------------------------------
 # 2. THE LOGIC ENGINE
@@ -45,13 +77,18 @@ def build_deck():
     
     # 1. SET TARGETS
     TARGET_TOTAL = 100
-    TARGET_LANDS = 37 # Standard EDH land count
-    TARGET_SPELLS = TARGET_TOTAL - TARGET_LANDS - 1 # -1 for Commander
+    
     
     c_info = get_card_data(cmdr_name)
     if not c_info:
         print("Commander not found!")
         return
+
+    cmc = c_info.get('cmc', 3.0)
+    TARGET_LANDS = round(30 + (cmc * 1.5))
+    TARGET_LANDS = max(33, min(TARGET_LANDS, 40))  # clamp between 33–40
+    print(f"[AI] Commander CMC: {cmc:.0f} → Using {TARGET_LANDS} lands")
+    TARGET_SPELLS = TARGET_TOTAL - TARGET_LANDS - 1 
 
     identity = c_info['identity']
     rem_budget = total_budget - c_info['price']
@@ -59,36 +96,53 @@ def build_deck():
     final_spells = []
     final_nonbasic_lands = []
     
-    print(f"\n[AI] Analyzing {cmdr_name}...")
+    print(f"\n[AI] Fetching synergy data for {cmdr_name}...")
     raw_synergy = get_edhrec_synergy(cmdr_name)
     
-    # 2. FILL SPELLS & UTILITY LANDS
-    for item in raw_synergy:
-        # Stop if we are full
+    if not raw_synergy:
+        print("No synergy data found. Check commander spelling.")
+        return
+
+    # 2. BULK FETCH SCRYFALL DATA
+    # We grab the top 150 names (giving us a buffer for expensive/rejected cards)
+    top_150_names = [item['name'] for item in raw_synergy[:150]]
+    
+    # Chunk into lists of 75 for Scryfall
+    chunks = [top_150_names[i:i + 75] for i in range(0, len(top_150_names), 75)]
+    
+    print(f"[AI] Downloading card data in {len(chunks)} batches...")
+    card_database = {}
+    for chunk in chunks:
+        batch_data = get_bulk_card_data(chunk)
+        card_database.update(batch_data)
+
+    print("[AI] Assembling deck...\n")
+
+    # 3. FILL SPELLS & UTILITY LANDS
+    # We iterate over the original sorted synergy list to maintain priority
+    for item in raw_synergy[:150]:
         if len(final_spells) >= TARGET_SPELLS and len(final_nonbasic_lands) >= 15:
             break
             
-        card = get_card_data(item['name'])
-        time.sleep(0.05) # Respect Scryfall
-        if not card or card['price'] == 0 or card['price'] > (rem_budget / 5): 
+        # Pull from our local dictionary instead of the internet!
+        card = card_database.get(item['name'])
+        
+        if not card or card['price'] == 0 or card['price'] > max(2, rem_budget / 3): 
             continue
 
-        # Check if it's a land or a spell
         if card['is_land']:
             if len(final_nonbasic_lands) < 15 and item['name'] not in final_nonbasic_lands:
                 final_nonbasic_lands.append(card['name'])
                 rem_budget -= card['price']
-                print(f"  + Utility Land: {card['name']} (${card['price']})")
+                print(f"  + Utility Land: {card['name']} (${card['price']:.2f})")
         else:
             if len(final_spells) < TARGET_SPELLS and item['name'] not in final_spells:
                 final_spells.append(card['name'])
                 rem_budget -= card['price']
-                print(f"  + Spell: {card['name']} (${card['price']})")
+                print(f"  + Spell: {card['name']} (${card['price']:.2f})")
 
-    # 3. CALCULATE BASICS
-
+    # 4. CALCULATE BASICS
     basics_needed = TARGET_LANDS - len(final_nonbasic_lands)
-    
     land_map = {'W': 'Plains', 'U': 'Island', 'B': 'Swamp', 'R': 'Mountain', 'G': 'Forest'}
     active_basics = [land_map[c] for c in identity if c in land_map] or ['Wastes']
     
@@ -101,7 +155,7 @@ def build_deck():
         if count > 0:
             basic_list.append(f"{count} {land_name}")
 
-    # 4. FINAL ASSEMBLY
+    # 5. FINAL ASSEMBLY
     full_deck = [f"1 {cmdr_name} *CMDR*"]
     for s in final_spells: full_deck.append(f"1 {s}")
     for l in final_nonbasic_lands: full_deck.append(f"1 {l}")
@@ -116,6 +170,7 @@ def build_deck():
     print("\n" + "="*30 + "\nCLEAN MOXFIELD LIST\n" + "="*30)
     for line in full_deck:
         print(line)
+    print(f"\nRemaining Budget: ${rem_budget:.2f}")
 
 if __name__ == "__main__":
     build_deck()
