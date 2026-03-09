@@ -43,7 +43,13 @@ def get_bulk_card_data(card_names):
                     "price": float(d.get('prices', {}).get('usd') or 0),
                     "identity": d.get('color_identity', []),
                     "type": d.get('type_line', "").lower(),
-                    "is_land": "land" in d.get('type_line', "").lower()
+                    "is_land": "land" in d.get('type_line', "").lower(),
+                    # We need to add extras for the simulator...
+                    "mana_cost":   d.get('mana_cost', ""),
+                    "type_line":   d.get('type_line', ""),
+                    "oracle_text": d.get('oracle_text', ""),
+                    "power":       d.get('power', None),
+                    "toughness":   d.get('toughness', None),
                 }
             return results
         else:
@@ -71,9 +77,32 @@ def get_edhrec_synergy(commander):
 # ---------------------------------------------------------
 # 2. THE LOGIC ENGINE
 # ---------------------------------------------------------
-def build_deck():
-    cmdr_name = input("Commander: ")
-    total_budget = float(input("Budget ($): "))
+def build_deck(cmdr_name=None, total_budget=None, print_list=True):
+    """Builds a deck given the commander name and the total budget.
+    
+    Args:
+        cmdr_name (str, optional): Name of the exact commander card. 
+            Defaults to prompting user input.
+        total_budget (float, optional): Maximum deck budget in USD.
+            Defaults to prompting user input.
+        print_list (boolean): Prints the list of cards.
+
+    Returns:
+        tuple: A tuple containing:
+            - full_deck (list[str]): Deck list in Moxfield format,
+              e.g. ["1 Lightning Bolt", "4 Forest"].
+            - card_database (dict): Raw Scryfall data keyed by card name.
+
+    Example:
+        >>> deck_lines, card_db = build_deck(
+        ...     cmdr_name="Cloud, Ex-SOLDIER",
+        ...     total_budget=200
+        ... )
+    """
+    if cmdr_name is None:
+        cmdr_name = input("Commander: ")
+    if total_budget is None:
+        total_budget = float(input("Budget ($): "))
     
     # 1. SET TARGETS
     TARGET_TOTAL = 100
@@ -167,10 +196,14 @@ def build_deck():
         shortfall = 100 - current_total
         full_deck[-1] = f"{int(full_deck[-1].split(' ')[0]) + shortfall} {full_deck[-1].split(' ', 1)[1]}"
 
-    print("\n" + "="*30 + "\nCLEAN MOXFIELD LIST\n" + "="*30)
-    for line in full_deck:
-        print(line)
-    print(f"\nRemaining Budget: ${rem_budget:.2f}")
+    if print_list == True:
+        print("\n" + "="*30 + "\nCLEAN MOXFIELD LIST\n" + "="*30)
+        for line in full_deck:
+            print(line)
+        print(f"\nRemaining Budget: ${rem_budget:.2f}")
+
+    # Returning the decklist to be used by other functions.
+    return full_deck, card_database  
 
 if __name__ == "__main__":
     build_deck()
