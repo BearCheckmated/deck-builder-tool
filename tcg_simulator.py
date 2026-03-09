@@ -562,6 +562,6 @@ if __name__ == "__main__":
     build_deck_and_simulate(deck_lines, card_db, 
                             opponent_deck_lines,
                             opponent_card_database, 
-                            n_games=20,
+                            n_games=500,
                             verbose_first_game=False)
 
