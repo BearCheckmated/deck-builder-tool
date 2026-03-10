@@ -1,5 +1,6 @@
 from flask import Flask, request
 from deck_builder import build_deck
+import os
 
 app = Flask(__name__)
 
@@ -27,4 +28,6 @@ def build():
 
     return "<pre>" + "\n".join(deck) + "</pre>"
 
-app.run()
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port)
