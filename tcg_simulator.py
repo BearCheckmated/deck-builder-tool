@@ -484,16 +484,34 @@ def parse_deck_list(deck_lines: list[str],
         # Strip tags like *CMDR* from the name
         name = parts[1].replace("*CMDR*", "").strip()
 
-        # --- Look up card data
+        # --- Robust card lookup: try exact, basics, lowercase, simplified, then fuzzy
         raw = card_database.get(name) or BASIC_LANDS.get(name)
+        if not raw:
+            # try lowercase key
+            low = name.lower()
+            low_map = {k.lower(): v for k, v in card_database.items()}
+            raw = low_map.get(low) or BASIC_LANDS.get(name.title())
+
+        if not raw:
+            # try simplified key (remove punctuation/extra spaces)
+            import re
+            key_simple = re.sub(r'[^a-z0-9 ]', '', name.lower()).strip()
+            candidates = {re.sub(r'[^a-z0-9 ]', '', k.lower()).strip(): v for k, v in card_database.items()}
+            raw = candidates.get(key_simple)
+
+        if not raw:
+            # fuzzy match on card names as a last resort
+            import difflib
+            choices = list(card_database.keys())
+            best = difflib.get_close_matches(name, choices, n=1, cutoff=0.7)
+            if best:
+                raw = card_database.get(best[0])
+
         if not raw:
             print(f"  [WARN] '{name}' not found in card_database, skipping.")
             continue
 
         # --- Convert to simulator Card format
-        # card_database entries use the same shape as Scryfall dicts,
-        # so parse_scryfall_card() handles the heavy lifting.
-        # We normalise a few field names your colleague may use differently.
         scryfall_dict = {
             "name":        raw.get("name", name),
             "mana_cost":   raw.get("mana_cost", ""),
@@ -545,6 +563,107 @@ def build_deck_and_simulate(deck_lines: list[str],
 
     print(f"\n[SIM] Running {n_games}-game tournament...")
     return run_tournament(deck1, deck2, n_games=n_games)
+
+
+# ---------------------------------------------------------------------------
+# 9.b Multiplayer helper functions (added)
+# ---------------------------------------------------------------------------
+
+def run_multiplayer_game(decks: list[list[Card]], verbose: bool = False, max_rounds: int = 50) -> str:
+    """Run a single multiplayer game between N decks. Returns winner name 'PlayerX' or 'Draw'."""
+    players = [Player(f"Player{i+1}", deck) for i, deck in enumerate(decks)]
+    # start first player's turn
+    players[0].start_turn()
+    turn = 0
+    round_num = 1
+    game_over = False
+    winner = None
+
+    while not game_over and round_num <= max_rounds:
+        p = players[turn]
+        if p.health > 0:
+            # 1. Play a land
+            lands = [c for c in p.hand if c.is_land and not p.land_played_this_turn]
+            if lands:
+                p.play_land(lands[0])
+            # 2. Play creatures (highest power first)
+            while True:
+                creatures = sorted(
+                    [c for c in p.hand if c.is_creature and c.mana_cost <= p.mana and c.power is not None],
+                    key=lambda c: (c.power or 0),
+                    reverse=True
+                )
+                if not creatures:
+                    break
+                p.play_creature(creatures[0])
+            # 3. Choose target opponent (highest HP)
+            opponents = [opp for opp in players if opp is not p and opp.health > 0]
+            target = max(opponents, key=lambda o: o.health) if opponents else None
+            # 4. Cast damage spells at target
+            while target:
+                dmg_spells = sorted(
+                    [c for c in p.hand if c.is_spell and c.effect == 'deal_damage' and c.mana_cost <= p.mana],
+                    key=lambda c: c.effect_value,
+                    reverse=True
+                )
+                if not dmg_spells:
+                    break
+                p.play_spell(dmg_spells[0], target)
+            # 5. Attack
+            attackers = [c for c in p.board if not c.has_attacked and not c.summoning_sick and c.power is not None]
+            if attackers and target:
+                total_damage = sum(c.power for c in attackers)
+                target.health -= total_damage
+                for c in attackers:
+                    c.has_attacked = True
+            # 6. Draw spells
+            while True:
+                draw_spells = [c for c in p.hand if c.is_spell and c.effect == 'draw_card' and c.mana_cost <= p.mana]
+                if not draw_spells:
+                    break
+                p.play_spell(draw_spells[0], target)
+            # cleanup
+            for pl in players:
+                pl.remove_dead_creatures()
+
+        # terminal checks
+        alive = [pl for pl in players if pl.health > 0]
+        if len(alive) == 1:
+            game_over = True
+            winner = alive[0].name
+            break
+        if not any(pl.deck or pl.hand for pl in players):
+            game_over = True
+            winner = 'Draw'
+            break
+
+        # advance
+        turn = (turn + 1) % len(players)
+        if turn == 0:
+            round_num += 1
+        players[turn].start_turn()
+
+    if not winner:
+        alive = [pl for pl in players if pl.health > 0]
+        winner = alive[0].name if len(alive) == 1 else 'Draw'
+    if verbose:
+        statuses = ', '.join(f"{p.name}:{p.health}HP" for p in players)
+        print(f"\nWinner: {winner} ({statuses})")
+    return winner
+
+
+def run_multiplayer_tournament(decks: list[list[Card]], n_games: int = 100) -> dict:
+    results = {f"Player{i+1}": 0 for i in range(len(decks))}
+    results["Draw"] = 0
+    for _ in range(n_games):
+        # deepcopy decks so each game starts fresh
+        winner = run_multiplayer_game([deepcopy(d) for d in decks], verbose=False)
+        results[winner] = results.get(winner, 0) + 1
+    total = n_games
+    print(f"\n=== Multiplayer Tournament Results ({n_games} games) ===")
+    for name, wins in results.items():
+        print(f"  {name}: {wins} wins ({100*wins/total:.1f}%)")
+    return results
 
 
 # ---------------------------------------------------------------------------

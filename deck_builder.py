@@ -116,7 +116,8 @@ def build_deck(cmdr_name=None, total_budget=None, print_list=True):
     cmc = c_info.get('cmc', 3.0)
     TARGET_LANDS = round(30 + (cmc * 1.5))
     TARGET_LANDS = max(33, min(TARGET_LANDS, 40))  # clamp between 33–40
-    print(f"[AI] Commander CMC: {cmc:.0f} → Using {TARGET_LANDS} lands")
+    # Use ASCII arrow to avoid Windows console encoding issues
+    print(f"[AI] Commander CMC: {cmc:.0f} -> Using {TARGET_LANDS} lands")
     TARGET_SPELLS = TARGET_TOTAL - TARGET_LANDS - 1 
 
     identity = c_info['identity']
@@ -144,6 +145,21 @@ def build_deck(cmdr_name=None, total_budget=None, print_list=True):
     for chunk in chunks:
         batch_data = get_bulk_card_data(chunk)
         card_database.update(batch_data)
+
+    # Ensure the commander is present in the local card database so downstream
+    # simulators can look it up when parsing the deck list.
+    if c_info and c_info.get('name'):
+        card_database[c_info['name']] = {
+            'name': c_info.get('name'),
+            'price': c_info.get('price', 0),
+            'identity': c_info.get('identity', []),
+            'type_line': c_info.get('type', ''),
+            'mana_cost': c_info.get('mana_cost', ''),
+            'oracle_text': c_info.get('oracle_text', ''),
+            'power': c_info.get('power', None),
+            'toughness': c_info.get('toughness', None),
+            'cmc': c_info.get('cmc', 0),
+        }
 
     print("[AI] Assembling deck...\n")
 
@@ -185,7 +201,8 @@ def build_deck(cmdr_name=None, total_budget=None, print_list=True):
             basic_list.append(f"{count} {land_name}")
 
     # 5. FINAL ASSEMBLY
-    full_deck = [f"1 {cmdr_name} *CMDR*"]
+    # Use Scryfall's canonical name if available to avoid lookup mismatches
+    full_deck = [f"1 {c_info.get('name', cmdr_name)} *CMDR*"]
     for s in final_spells: full_deck.append(f"1 {s}")
     for l in final_nonbasic_lands: full_deck.append(f"1 {l}")
     for b in basic_list: full_deck.append(b)

@@ -1,0 +1,20 @@
+[Unit]
+Description=Deck Optimizer
+After=network.target
+
+[Service]
+Type=simple
+User=youruser
+WorkingDirectory=/path/to/deck-builder-tool
+ExecStart=/usr/bin/python3 /path/to/deck-builder-tool/run_optimizer_batch.py --commander "Atraxa, praetor's voice" --budget 100 --sims 2000 --pop 20 --gens 50
+Restart=on-failure
+StandardOutput=append:/path/to/deck-builder-tool/optimizer.log
+StandardError=append:/path/to/deck-builder-tool/optimizer.err
+
+[Install]
+WantedBy=multi-user.target
+
+# Notes:
+# - Replace `youruser` and all /path/to/... placeholders with real values on the server.
+# - Consider using a virtualenv and point ExecStart to the venv python (e.g. /home/youruser/venv/bin/python).
+# - Logs will be written to optimizer.log / optimizer.err in the chosen path.
